@@ -14,6 +14,8 @@ export interface CalculationItem {
   arlClass: number;
   isExempt: boolean;
   createdAt: Date;
+  isSena?: boolean;
+  senaStage?: string;
 }
 
 function handleError(err: unknown): never {
@@ -41,6 +43,8 @@ export async function getCalculations(): Promise<CalculationItem[]> {
       'arlClass',
       'isExempt',
       'createdAt',
+      'isSena',
+      'senaStage',
     ])
       .orderBy({ createdAt: 'desc' })
       .execute();
@@ -58,6 +62,8 @@ export async function createCalculation(data: {
   isIntegral: boolean;
   arlClass: number;
   isExempt: boolean;
+  isSena?: boolean;
+  senaStage?: string;
 }): Promise<CalculationItem> {
   try {
     const client = getRayfinClient();
@@ -73,6 +79,8 @@ export async function createCalculation(data: {
       isIntegral: data.isIntegral,
       arlClass: data.arlClass,
       isExempt: data.isExempt,
+      isSena: data.isSena || false,
+      senaStage: data.senaStage || '',
       createdAt: new Date(),
       user_id: session.user.id,
     });

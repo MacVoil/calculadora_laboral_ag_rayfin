@@ -39,25 +39,40 @@ export function HomePage() {
   const [salary, setSalary] = useState<number>(2000000);
   const [smmlv, setSmmlv] = useState<number>(1750905);
   const [auxTransport, setAuxTransport] = useState<number>(249095);
-  const [isIntegral, setIsIntegral] = useState<boolean>(false);
+  const [salaryType, setSalaryType] = useState<'ordinary' | 'integral' | 'sena'>('ordinary');
+  const [senaStage, setSenaStage] = useState<'lectiva' | 'productiva'>('lectiva');
   const [arlClass, setArlClass] = useState<number>(1);
   const [isExempt, setIsExempt] = useState<boolean>(true); // Exempt from Salud (8.5%), SENA (2%), ICBF (3%) if < 10 SMMLV
+
+  // Helper variables for compatibility
+  const isIntegral = salaryType === 'integral';
 
   // Saved calculations history state
   const [calculations, setCalculations] = useState<CalculationItem[]>([]);
   const [calcName, setCalcName] = useState('');
   const [calcLoading, setCalcLoading] = useState(true);
 
+  // Auto-adjust salary when it is a SENA apprentice
+  useEffect(() => {
+    if (salaryType === 'sena') {
+      if (senaStage === 'lectiva') {
+        setSalary(Math.round(smmlv * 0.75));
+      } else {
+        setSalary(smmlv);
+      }
+    }
+  }, [salaryType, senaStage, smmlv]);
+
   // Auto-adjust exemption checkbox based on salary and SMMLV, but allow user overrides
   useEffect(() => {
-    // If ordinary salary >= 10 SMMLV, or if integral salary (which is >= 13 SMMLV), set isExempt to false
-    const totalWage = salary;
-    if (isIntegral || totalWage >= smmlv * 10) {
+    if (salaryType === 'sena') {
+      setIsExempt(true);
+    } else if (salaryType === 'integral' || salary >= smmlv * 10) {
       setIsExempt(false);
     } else {
       setIsExempt(true);
     }
-  }, [salary, smmlv, isIntegral]);
+  }, [salary, smmlv, salaryType]);
 
   // Fetch data
   const fetchTodos = useCallback(async () => {
@@ -124,6 +139,8 @@ export function HomePage() {
       isIntegral,
       arlClass,
       isExempt,
+      isSena: salaryType === 'sena',
+      senaStage: salaryType === 'sena' ? senaStage : '',
     });
     await fetchCalculations();
   };
@@ -137,7 +154,14 @@ export function HomePage() {
     setSalary(calc.salary);
     setSmmlv(calc.smmlv);
     setAuxTransport(calc.auxTransport);
-    setIsIntegral(calc.isIntegral);
+    if (calc.isSena) {
+      setSalaryType('sena');
+      setSenaStage((calc.senaStage as 'lectiva' | 'productiva') || 'lectiva');
+    } else if (calc.isIntegral) {
+      setSalaryType('integral');
+    } else {
+      setSalaryType('ordinary');
+    }
     setArlClass(calc.arlClass);
     setIsExempt(calc.isExempt);
   };
@@ -147,63 +171,141 @@ export function HomePage() {
     const minIntegralWage = smmlv * 13;
     const isIntegralValid = isIntegral ? salary >= minIntegralWage : true;
 
-    // 1. Auxilio de Transporte
-    const atValue = (!isIntegral && salary <= smmlv * 2) ? auxTransport : 0;
+    let atValue = 0;
+    let cappedIbc = 0;
+    let baseParafiscales = 0;
+    let baseVacaciones = 0;
 
-    // 2. Ingreso Base de Cotización (IBC)
-    const rawIbc = isIntegral ? salary * 0.70 : salary;
-    // Cap IBC at 25 SMMLV, floor at 1 SMMLV
-    const cappedIbc = Math.min(Math.max(rawIbc, smmlv), smmlv * 25);
-
-    // 3. Base for Parafiscales and Vacaciones
-    const baseParafiscales = isIntegral ? salary * 0.70 : salary;
-    const baseVacaciones = isIntegral ? salary * 0.70 : salary;
-    const basePrimaCesantias = isIntegral ? 0 : (salary + atValue);
+    if (salaryType === 'sena') {
+      // Contrato de aprendizaje SENA (Reforma Laboral - Ley 2466 de 2025)
+      if (senaStage === 'lectiva') {
+        // Etapa Lectiva: 75% SMMLV. No auxilio transporte.
+        atValue = 0;
+        cappedIbc = salary; // Base de cotización especial (75% SMMLV) sin piso de 1 SMMLV
+        baseParafiscales = 0;
+        baseVacaciones = 0;
+      } else {
+        // Etapa Productiva: 100% SMMLV. Auxilio transporte aplica.
+        atValue = auxTransport;
+        cappedIbc = salary; // es igual a 1 SMMLV
+        baseParafiscales = salary; // para Caja de Compensación (4%)
+        baseVacaciones = salary;
+      }
+    } else {
+      // Salarios Ordinario / Integral
+      atValue = (!isIntegral && salary <= smmlv * 2) ? auxTransport : 0;
+      const rawIbc = isIntegral ? salary * 0.70 : salary;
+      cappedIbc = Math.min(Math.max(rawIbc, smmlv), smmlv * 25);
+      baseParafiscales = isIntegral ? salary * 0.70 : salary;
+      baseVacaciones = isIntegral ? salary * 0.70 : salary;
+    }
 
     // 4. Prestaciones Sociales
-    const prima = isIntegral ? 0 : basePrimaCesantias * 0.0833;
-    const cesantias = isIntegral ? 0 : basePrimaCesantias * 0.0833;
-    const interesesCesantias = isIntegral ? 0 : cesantias * 0.12;
-    const vacaciones = baseVacaciones * 0.0417;
+    let prima = 0;
+    let cesantias = 0;
+    let interesesCesantias = 0;
+    let vacaciones = 0;
+
+    if (salaryType === 'sena') {
+      if (senaStage === 'productiva') {
+        // En etapa productiva bajo la reforma, tienen derecho a prestaciones sociales completas
+        const basePrimaCesantias = salary + atValue;
+        prima = basePrimaCesantias * 0.0833;
+        cesantias = basePrimaCesantias * 0.0833;
+        interesesCesantias = cesantias * 0.12;
+        vacaciones = baseVacaciones * 0.0417;
+      }
+      // Etapa Lectiva no tiene prestaciones sociales.
+    } else {
+      const basePrimaCesantias = isIntegral ? 0 : (salary + atValue);
+      prima = isIntegral ? 0 : basePrimaCesantias * 0.0833;
+      cesantias = isIntegral ? 0 : basePrimaCesantias * 0.0833;
+      interesesCesantias = isIntegral ? 0 : cesantias * 0.12;
+      vacaciones = baseVacaciones * 0.0417;
+    }
+
     const totalPrestaciones = prima + cesantias + interesesCesantias + vacaciones;
 
     // 5. Seguridad Social (Employer Part)
-    const employerSalud = isExempt ? 0 : cappedIbc * 0.085;
-    const employerPension = cappedIbc * 0.12;
+    let employerSalud = 0;
+    let employerPension = 0;
     const arlRate = ARL_CLASSES.find(r => r.class === arlClass)?.rate || 0.00522;
     const employerArl = cappedIbc * arlRate;
+
+    if (salaryType === 'sena') {
+      if (senaStage === 'lectiva') {
+        // Etapa Lectiva: Empresa asume 100% de Salud (12.5%). No hay pensión.
+        employerSalud = cappedIbc * 0.125;
+        employerPension = 0;
+      } else {
+        // Etapa Productiva: Salud (8.5% empleador / 4% aprendiz) + Pensión (12% empleador / 4% aprendiz)
+        // Aplica exoneración de salud si la empresa es exenta
+        employerSalud = isExempt ? 0 : cappedIbc * 0.085;
+        employerPension = cappedIbc * 0.12;
+      }
+    } else {
+      employerSalud = isExempt ? 0 : cappedIbc * 0.085;
+      employerPension = cappedIbc * 0.12;
+    }
+
     const totalSeguridadSocial = employerSalud + employerPension + employerArl;
 
     // 6. Parafiscales
-    const cajaCompensacion = baseParafiscales * 0.04;
-    const sena = isExempt ? 0 : baseParafiscales * 0.02;
-    const icbf = isExempt ? 0 : baseParafiscales * 0.03;
+    let cajaCompensacion = 0;
+    let sena = 0;
+    let icbf = 0;
+
+    if (salaryType === 'sena') {
+      if (senaStage === 'productiva') {
+        // Aporta Caja de Compensación (4%). Exento de SENA e ICBF.
+        cajaCompensacion = baseParafiscales * 0.04;
+      }
+      // Etapa lectiva no aporta parafiscales.
+    } else {
+      cajaCompensacion = baseParafiscales * 0.04;
+      sena = isExempt ? 0 : baseParafiscales * 0.02;
+      icbf = isExempt ? 0 : baseParafiscales * 0.03;
+    }
+
     const totalParafiscales = cajaCompensacion + sena + icbf;
 
     // 7. Employer Total Cost
     const totalCostToEmployer = salary + atValue + totalPrestaciones + totalSeguridadSocial + totalParafiscales;
 
     // 8. Employee Deductions
-    const employeeSalud = cappedIbc * 0.04;
-    const employeePension = cappedIbc * 0.04;
-
-    // Fondo de Solidaridad Pensional (FSP)
+    let employeeSalud = 0;
+    let employeePension = 0;
     let employeeSolidaridad = 0;
-    if (cappedIbc >= smmlv * 4) {
-      if (cappedIbc < smmlv * 16) {
-        employeeSolidaridad = cappedIbc * 0.01;
-      } else if (cappedIbc < smmlv * 17) {
-        employeeSolidaridad = cappedIbc * 0.012;
-      } else if (cappedIbc < smmlv * 18) {
-        employeeSolidaridad = cappedIbc * 0.014;
-      } else if (cappedIbc < smmlv * 19) {
-        employeeSolidaridad = cappedIbc * 0.016;
-      } else if (cappedIbc < smmlv * 20) {
-        employeeSolidaridad = cappedIbc * 0.018;
-      } else {
-        employeeSolidaridad = cappedIbc * 0.02;
+
+    if (salaryType === 'sena') {
+      if (senaStage === 'productiva') {
+        // Aprendiz aporta 4% salud y 4% pensión
+        employeeSalud = cappedIbc * 0.04;
+        employeePension = cappedIbc * 0.04;
+      }
+      // Etapa Lectiva no tiene deducciones
+    } else {
+      employeeSalud = cappedIbc * 0.04;
+      employeePension = cappedIbc * 0.04;
+
+      // Fondo de Solidaridad Pensional (FSP)
+      if (cappedIbc >= smmlv * 4) {
+        if (cappedIbc < smmlv * 16) {
+          employeeSolidaridad = cappedIbc * 0.01;
+        } else if (cappedIbc < smmlv * 17) {
+          employeeSolidaridad = cappedIbc * 0.012;
+        } else if (cappedIbc < smmlv * 18) {
+          employeeSolidaridad = cappedIbc * 0.014;
+        } else if (cappedIbc < smmlv * 19) {
+          employeeSolidaridad = cappedIbc * 0.016;
+        } else if (cappedIbc < smmlv * 20) {
+          employeeSolidaridad = cappedIbc * 0.018;
+        } else {
+          employeeSolidaridad = cappedIbc * 0.02;
+        }
       }
     }
+
     const totalEmployeeDeductions = employeeSalud + employeePension + employeeSolidaridad;
     const netToReceive = salary + atValue - totalEmployeeDeductions;
 
@@ -232,7 +334,7 @@ export function HomePage() {
       totalEmployeeDeductions,
       netToReceive,
     };
-  }, [salary, smmlv, auxTransport, isIntegral, arlClass, isExempt]);
+  }, [salary, smmlv, auxTransport, salaryType, senaStage, arlClass, isExempt]);
 
   // Formatter for currency
   const formatCOP = (value: number) => {
@@ -334,31 +436,73 @@ export function HomePage() {
                   {/* Tipo de salario */}
                   <div>
                     <label className="block text-xs font-semibold text-[#616161] mb-2 uppercase tracking-wide">Tipo de Salario</label>
-                    <div className="grid grid-cols-2 gap-2 p-1 bg-[#f3f3f3] rounded border border-[#e0e0e0]">
+                    <div className="grid grid-cols-3 gap-2 p-1 bg-[#f3f3f3] rounded border border-[#e0e0e0]">
                       <button
                         type="button"
-                        onClick={() => setIsIntegral(false)}
-                        className={`py-1.5 text-xs font-medium rounded transition-all cursor-pointer ${
-                          !isIntegral
+                        onClick={() => setSalaryType('ordinary')}
+                        className={`py-1.5 text-[10px] font-medium rounded transition-all cursor-pointer ${
+                          salaryType === 'ordinary'
                             ? 'bg-white text-[#0f6cbd] shadow-sm font-semibold'
                             : 'text-[#616161] hover:text-[#242424]'
                         }`}
                       >
-                        Salario Ordinario
+                        S. Ordinario
                       </button>
                       <button
                         type="button"
-                        onClick={() => setIsIntegral(true)}
-                        className={`py-1.5 text-xs font-medium rounded transition-all cursor-pointer ${
-                          isIntegral
+                        onClick={() => setSalaryType('integral')}
+                        className={`py-1.5 text-[10px] font-medium rounded transition-all cursor-pointer ${
+                          salaryType === 'integral'
                             ? 'bg-white text-[#0f6cbd] shadow-sm font-semibold'
                             : 'text-[#616161] hover:text-[#242424]'
                         }`}
                       >
-                        Salario Integral
+                        S. Integral
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSalaryType('sena')}
+                        className={`py-1.5 text-[10px] font-medium rounded transition-all cursor-pointer ${
+                          salaryType === 'sena'
+                            ? 'bg-white text-[#0f6cbd] shadow-sm font-semibold'
+                            : 'text-[#616161] hover:text-[#242424]'
+                        }`}
+                      >
+                        Aprendiz SENA
                       </button>
                     </div>
                   </div>
+
+                  {/* Etapa del Aprendiz SENA */}
+                  {salaryType === 'sena' && (
+                    <div>
+                      <label className="block text-xs font-semibold text-[#616161] mb-2 uppercase tracking-wide">Etapa del Aprendiz SENA (Reforma 2026)</label>
+                      <div className="grid grid-cols-2 gap-2 p-1 bg-[#f3f3f3] rounded border border-[#e0e0e0]">
+                        <button
+                          type="button"
+                          onClick={() => setSenaStage('lectiva')}
+                          className={`py-1.5 text-[10px] font-medium rounded transition-all cursor-pointer ${
+                            senaStage === 'lectiva'
+                              ? 'bg-white text-[#0f6cbd] shadow-sm font-semibold'
+                              : 'text-[#616161] hover:text-[#242424]'
+                          }`}
+                        >
+                          Lectiva (75%)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSenaStage('productiva')}
+                          className={`py-1.5 text-[10px] font-medium rounded transition-all cursor-pointer ${
+                            senaStage === 'productiva'
+                              ? 'bg-white text-[#0f6cbd] shadow-sm font-semibold'
+                              : 'text-[#616161] hover:text-[#242424]'
+                          }`}
+                        >
+                          Productiva (100%)
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Valor del salario */}
                   <div>
@@ -371,12 +515,18 @@ export function HomePage() {
                         id="salary-input"
                         type="number"
                         min="0"
+                        disabled={salaryType === 'sena'}
                         value={salary}
                         onChange={(e) => setSalary(Number(e.target.value))}
-                        className="fluent-input w-full pl-7 py-2 text-sm"
+                        className={`fluent-input w-full !pl-7 py-2 text-sm ${salaryType === 'sena' ? 'opacity-60 bg-[#f3f3f3] cursor-not-allowed' : ''}`}
                         placeholder="Ej. 2000000"
                       />
                     </div>
+                    {salaryType === 'sena' && (
+                      <span className="text-[10px] text-[#616161] mt-1 block">
+                        * Calculado automáticamente según el SMMLV vigente.
+                      </span>
+                    )}
                   </div>
 
                   {/* ARL dropdown */}

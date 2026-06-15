@@ -21,6 +21,8 @@ export class Calculation {
   @boolean() isIntegral!: boolean;
   @int() arlClass!: number;
   @boolean() isExempt!: boolean;
+  @boolean({ optional: true }) isSena?: boolean;
+  @text({ optional: true, max: 20 }) senaStage?: string;
   @date() createdAt!: Date;
   @text() user_id!: string;
 }
